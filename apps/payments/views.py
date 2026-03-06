@@ -1,80 +1,99 @@
 import logging
-
 from rest_framework import viewsets, status
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-
-from apps.shared.response import ResponseWrapper
 from apps.shared.pagination import CustomPagination
-
+from apps.shared.response.serializers import (
+    ApiResponseSerializer,
+    NoContentResponseSerializer,
+)
 from .services.payment_service import PaymentService
-from .serializers import PaymentSerializer
+from .serializers import (
+    PaymentSerializer,
+    CreatePaymentResponseSerializer,
+    UpdatePaymentResponseSerializer,
+    RetrievePaymentResponseSerializer,
+    ListPaymentResponseSerializer,
+    PaginatedPaymentsResponseSerializer,
+)
 from .models import Payment
-from .documentation.payment_doc_data import PaymentDocumentationData as PaymentDocData
 
 logger = logging.getLogger(__name__)
 
+# Global error response mapping to reduce verbosity
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: ApiResponseSerializer,
+    status.HTTP_403_FORBIDDEN: ApiResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ApiResponseSerializer,
+}
 
+
+@extend_schema(tags=["Payments (Admin)"])
 class PaymentAdminViews(viewsets.ModelViewSet):
     serializer_class = PaymentSerializer
     pagination_class = CustomPagination
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="list_payments",
-        operation_summary=PaymentDocData.list_operation_summary,
-        operation_description=PaymentDocData.list_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
+        summary="List all payments",
+        description="Retrieve a paginated list of payments with optional filtering by status, method, date range, and amount",
+        parameters=[
+            OpenApiParameter(
                 "status",
-                openapi.IN_QUERY,
-                description="Filter by payment status",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Filter by payment status (PENDING, COMPLETED, REFUNDED, CANCELLED)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "payment_method",
-                openapi.IN_QUERY,
-                description="Filter by payment method",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Filter by payment method (CASH, CARD, TRANSACTION)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "start_date",
-                openapi.IN_QUERY,
-                description="Start date for date range filter (YYYY-MM-DD)",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Start date for date range filter (YYYY-MM-DD format)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "end_date",
-                openapi.IN_QUERY,
-                description="End date for date range filter (YYYY-MM-DD)",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="End date for date range filter (YYYY-MM-DD format)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "min_amount",
-                openapi.IN_QUERY,
-                description="Minimum payment amount",
-                type=openapi.TYPE_NUMBER,
+                type=OpenApiTypes.DECIMAL,
+                location=OpenApiParameter.QUERY,
+                description="Minimum payment amount filter",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "max_amount",
-                openapi.IN_QUERY,
-                description="Maximum payment amount",
-                type=openapi.TYPE_NUMBER,
+                type=OpenApiTypes.DECIMAL,
+                location=OpenApiParameter.QUERY,
+                description="Maximum payment amount filter",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "page_size",
-                openapi.IN_QUERY,
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
                 description="Number of results per page",
-                type=openapi.TYPE_INTEGER,
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: PaymentDocData.payment_list_response,
-            status.HTTP_401_UNAUTHORIZED: PaymentDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: PaymentDocData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: PaymentDocData.server_error_reponse,
+            200: PaginatedPaymentsResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Payments (Admin)"],
     )
     def list(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -92,27 +111,23 @@ class PaymentAdminViews(viewsets.ModelViewSet):
         )
 
         serializer = self.get_serializer(page, many=True)
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity="Payment List",
-            metadata={
-                "pagination": self.paginator.get_paginated_response({}).data,
-                "applied_filters": applied_filters,
-            },
-        )
+        response_data = PaginatedPaymentsResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": "Payments retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_payment",
-        operation_summary=PaymentDocData.retrieve_operation_summary,
-        operation_description=PaymentDocData.retrieve_operation_description,
+        summary="Retrieve a single payment",
+        description="Get detailed information about a specific payment by ID",
         responses={
-            status.HTTP_200_OK: PaymentDocData.payment_response,
-            status.HTTP_401_UNAUTHORIZED: PaymentDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: PaymentDocData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: PaymentDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: PaymentDocData.server_error_reponse,
+            200: RetrievePaymentResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Payments (Admin)"],
     )
     def retrieve(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -122,24 +137,25 @@ class PaymentAdminViews(viewsets.ModelViewSet):
         )
 
         serializer = self.get_serializer(instance)
-        logger.info(f"Returning details for table ID: {instance.id}.")
-        return ResponseWrapper.found(
-            data=serializer.data, entity=f"Payment {instance.id}"
-        )
+        logger.info(f"Returning details for payment ID: {instance.id}.")
+        response_data = RetrievePaymentResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": "Payment retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_payment",
-        operation_summary=PaymentDocData.create_operation_summary,
-        operation_description=PaymentDocData.create_operation_description,
-        request_body=PaymentSerializer,
+        summary="Create a new payment",
+        description="Create a new payment record for an order or standalone",
+        request=PaymentSerializer,
         responses={
-            status.HTTP_201_CREATED: PaymentDocData.payment_response,
-            status.HTTP_400_BAD_REQUEST: PaymentDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: PaymentDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: PaymentDocData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: PaymentDocData.server_error_reponse,
+            201: CreatePaymentResponseSerializer,
+            400: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Payments (Admin)"],
     )
     def create(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -152,22 +168,25 @@ class PaymentAdminViews(viewsets.ModelViewSet):
         logger.info(f"Payment ID: {payment.id} created successfully.")
 
         serializer = self.get_serializer(payment)
-        return ResponseWrapper.created(data=serializer.data, entity="Payment")
+        response_data = CreatePaymentResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Payment {payment.id} successfully created",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_payment",
-        operation_summary=PaymentDocData.update_operation_summary,
-        operation_description=PaymentDocData.update_operation_description,
-        request_body=PaymentSerializer,
+        summary="Update a payment",
+        description="Update payment information (method, status, discount, VAT, etc.)",
+        request=PaymentSerializer,
         responses={
-            status.HTTP_200_OK: PaymentDocData.payment_response,
-            status.HTTP_400_BAD_REQUEST: PaymentDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: PaymentDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: PaymentDocData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: PaymentDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: PaymentDocData.server_error_reponse,
+            200: UpdatePaymentResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Payments (Admin)"],
     )
     def update(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -181,31 +200,32 @@ class PaymentAdminViews(viewsets.ModelViewSet):
         logger.info(f"Payment ID: {payment.id} updated successfully.")
 
         serializer = self.get_serializer(payment)
-        return ResponseWrapper.created(
-            data=serializer.data,
-            entity=f"Payment {payment.id}",
-        )
+        response_data = UpdatePaymentResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Payment {payment.id} successfully updated",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="delete_payment",
-        operation_summary=PaymentDocData.destroy_operation_summary,
-        operation_description=PaymentDocData.destroy_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
+        summary="Delete a payment",
+        description="Remove or soft-delete a payment record",
+        parameters=[
+            OpenApiParameter(
                 "hard_delete",
-                openapi.IN_QUERY,
-                description="Permanently delete record if true",
-                type=openapi.TYPE_BOOLEAN,
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                description="Permanently delete payment record if true (default: soft delete)",
+                required=False,
             )
         ],
         responses={
-            status.HTTP_204_NO_CONTENT: PaymentDocData.success_no_data,
-            status.HTTP_401_UNAUTHORIZED: PaymentDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: PaymentDocData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: PaymentDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: PaymentDocData.server_error_reponse,
+            204: NoContentResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Payments (Admin)"],
     )
     def destroy(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -216,7 +236,7 @@ class PaymentAdminViews(viewsets.ModelViewSet):
         logger.info(f"User {user_id} is requesting to delete Payment Id {payment_id}.")
         PaymentService.delete_payment(instance, hard_delete=is_hard_delete)
 
-        return ResponseWrapper.deleted(f"Payment {payment_id}")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_queryset(self):
         """Apply search filters to the base queryset"""

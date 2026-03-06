@@ -1,54 +1,68 @@
+import logging
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework import status
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-
-import logging
-
-from ..documentation.order_doc_data import OrderDocumentationData
-from ..serializers import OrderSerializer
+from ..serializers import (
+    OrderSerializer,
+    CreateOrderResponseSerializer,
+    UpdateOrderResponseSerializer,
+    RetrieveOrderResponseSerializer,
+    ListOrderResponseSerializer,
+    PaginatedOrdersResponseSerializer,
+)
 from ..models import Order
 from ..services.order_service import OrderService
 from apps.payments.services.payment_service import PaymentService
 from apps.payments.serializers import PaymentSerializer
-
-from apps.shared.response import ResponseWrapper
+from apps.shared.response.serializers import (
+    ApiResponseSerializer,
+    NoContentResponseSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
+# Global error response mapping to reduce verbosity
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: ApiResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ApiResponseSerializer,
+}
 
+
+@extend_schema(tags=["Orders"])
 class OrderViewsSet(ModelViewSet):
     queryset = Order.objects.all()
     serializer_class = OrderSerializer
     permission_classes = []
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="list_orders",
-        operation_summary=OrderDocumentationData.list_operation_summary,
-        operation_description=OrderDocumentationData.list_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
+        summary="List all orders",
+        description="Retrieve a paginated list of all orders with optional status and table filtering",
+        parameters=[
+            OpenApiParameter(
                 "status",
-                openapi.IN_QUERY,
-                description="Filter by order status",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Filter by order status (IN_PROGRESS, COMPLETED, or CANCELLED)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "table_id",
-                openapi.IN_QUERY,
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
                 description="Filter by table ID",
-                type=openapi.TYPE_INTEGER,
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.order_list_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            200: PaginatedOrdersResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     def list(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -57,23 +71,24 @@ class OrderViewsSet(ModelViewSet):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
 
-        logger.info(f"Returning {len(queryset)} tables.")
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity="Order List",
-        )
+        logger.info(f"Returning {len(queryset)} orders.")
+        response_data = ListOrderResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": "Orders retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_order",
-        operation_summary=OrderDocumentationData.retrieve_operation_summary,
-        operation_description=OrderDocumentationData.retrieve_operation_description,
+        summary="Retrieve a single order",
+        description="Get detailed information about a specific order by ID",
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.order_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: OrderDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            200: RetrieveOrderResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     def retrieve(self, request, *args, **kwargs):
         order = self.get_object()
@@ -83,23 +98,24 @@ class OrderViewsSet(ModelViewSet):
         serializer = self.get_serializer(order)
 
         logger.info(f"Returning details for order ID: {order.id}.")
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity=f"Order {order.id}",
-        )
+        response_data = RetrieveOrderResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Order {order.id} retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_order",
-        operation_summary=OrderDocumentationData.create_operation_summary,
-        operation_description=OrderDocumentationData.create_operation_description,
-        request_body=OrderSerializer,
+        summary="Create a new order",
+        description="Create a new order for a specific table",
+        request=OrderSerializer,
         responses={
-            status.HTTP_201_CREATED: OrderDocumentationData.order_response,
-            status.HTTP_400_BAD_REQUEST: OrderDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            201: CreateOrderResponseSerializer,
+            400: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     def create(self, request, *args, **kwargs):
         user_id = getattr(request.user, "id", "Anonymous")
@@ -111,37 +127,40 @@ class OrderViewsSet(ModelViewSet):
 
         logger.info(f"Order ID: {order.id} created successfully.")
         serializer = self.get_serializer(order)
-        return ResponseWrapper.created(
-            data=serializer.data,
-            entity=f"Order {order.id}",
-        )
+        response_data = CreateOrderResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Order {order.id} successfully created",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_order",
-        operation_summary=OrderDocumentationData.update_operation_summary,
-        operation_description=OrderDocumentationData.update_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
+        summary="Update an order",
+        description="Update order status or assigned table",
+        parameters=[
+            OpenApiParameter(
                 "status",
-                openapi.IN_QUERY,
-                description="New status for the order",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="New status for the order (IN_PROGRESS, COMPLETED, or CANCELLED)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "table_id",
-                openapi.IN_QUERY,
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
                 description="New table ID for the order",
-                type=openapi.TYPE_INTEGER,
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.order_response,
-            status.HTTP_400_BAD_REQUEST: OrderDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: OrderDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            200: UpdateOrderResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     def update(self, request, *args, **kwargs):
         order = self.get_object()
@@ -155,37 +174,24 @@ class OrderViewsSet(ModelViewSet):
         logger.info(f"Order ID: {order.id} updated successfully.")
 
         serializer = self.get_serializer(order_updated)
-        return ResponseWrapper.updated(
-            data=serializer.data,
-            entity=f"Order {order.id}",
-        )
+        response_data = UpdateOrderResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Order {order.id} successfully updated",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
-        operation_id="update_order",
-        operation_summary=OrderDocumentationData.update_operation_summary,
-        operation_description=OrderDocumentationData.update_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
-                "status",
-                openapi.IN_QUERY,
-                description="New status for the order",
-                type=openapi.TYPE_STRING,
-            ),
-            openapi.Parameter(
-                "table_id",
-                openapi.IN_QUERY,
-                description="New table ID for the order",
-                type=openapi.TYPE_INTEGER,
-            ),
-        ],
+    @extend_schema(
+        operation_id="delete_order",
+        summary="Delete an order",
+        description="Remove an order from the system",
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.order_response,
-            status.HTTP_400_BAD_REQUEST: OrderDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: OrderDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            204: NoContentResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     def destroy(self, request, *args, **kwargs):
         order = self.get_object()
@@ -196,22 +202,18 @@ class OrderViewsSet(ModelViewSet):
         OrderService.delete_order(order)
 
         logger.info(f"Order ID: {order_id} deleted successfully.")
-        return ResponseWrapper.deleted(
-            entity=f"Order {order_id}",
-        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="complete_order",
-        operation_summary=OrderDocumentationData.complete_operation_summary,
-        operation_description=OrderDocumentationData.complete_operation_description,
+        summary="Complete an order",
+        description="Mark an order as completed and initiate payment",
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.order_response,
-            status.HTTP_400_BAD_REQUEST: OrderDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: OrderDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            200: ApiResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     @action(detail=True, methods=["patch"])
     def complete(self, request, *args, **kwargs):
@@ -225,23 +227,22 @@ class OrderViewsSet(ModelViewSet):
         payment = PaymentService.create_payment_from_order(order_completed)
 
         payment_serializer = PaymentSerializer(payment)
-        return ResponseWrapper.success(
-            data=payment_serializer.data,
-            message=f"Order {order.id} Succesfully Completed. A Payment with Id {payment.id} was inited pending to be paid",
-        )
+        response_data = {
+            "data": payment_serializer.data,
+            "message": f"Order {order.id} successfully completed. Payment {payment.id} initiated pending payment",
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="cancel_order",
-        operation_summary=OrderDocumentationData.cancel_operation_summary,
-        operation_description=OrderDocumentationData.cancel_operation_description,
+        summary="Cancel an order",
+        description="Mark an order as cancelled",
         responses={
-            status.HTTP_200_OK: OrderDocumentationData.success_no_data,
-            status.HTTP_400_BAD_REQUEST: OrderDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: OrderDocumentationData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: OrderDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: OrderDocumentationData.server_error_reponse,
+            200: ApiResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Orders"],
     )
     @action(detail=True, methods=["patch"])
     def cancel(self, request, *args, **kwargs):
@@ -250,8 +251,9 @@ class OrderViewsSet(ModelViewSet):
         logger.info(f"User {user_id} is requesting to cancel status order {order.id}.")
 
         OrderService.cancel_order(order)
-        logger.info(f"Order ID: {order.id} Succesfully Cancelled.")
+        logger.info(f"Order ID: {order.id} successfully cancelled.")
 
-        return ResponseWrapper.success(
-            message=f"Order {order.id} Succesfully Cancelled"
-        )
+        response_data = {
+            "message": f"Order {order.id} successfully cancelled",
+        }
+        return Response(response_data, status=status.HTTP_200_OK)

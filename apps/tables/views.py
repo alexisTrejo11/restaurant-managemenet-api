@@ -1,170 +1,195 @@
-from rest_framework import viewsets
-from .models import Table
-from .serializers import TableSerializer
-from apps.shared.response import ResponseWrapper
-from .services.table_service import TableService
 import logging
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-from rest_framework import status
-from .serializers import TableSerializer
-from .documentation.table_documentation_data import (
-    TableDocumentationData as TableDocData,
+
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+
+from apps.shared.utils.log_user_actions import log_user_action
+from apps.shared.response import (
+    NoContentResponseSerializer,
+    ValidationErrorResponseSerializer,
+    NotFoundErrorResponseSerializer,
+    UnauthorizedErrorResponseSerializer,
+    ForbiddenErrorResponseSerializer,
+    ServerErrorResponseSerializer,
+)
+
+from .models import Table
+from .services.table_service import TableService
+from .serializers import (
+    TableSerializer,
+    CreateTableResponseSerializer,
+    UpdateTableResponseSerializer,
+    FoundTableResponseSerializer,
+    FoundTableListResponseSerializer,
+    PaginatedTablesResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
 
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: UnauthorizedErrorResponseSerializer,
+    status.HTTP_403_FORBIDDEN: ForbiddenErrorResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ServerErrorResponseSerializer,
+}
 
-class TableViews(viewsets.ModelViewSet):
+
+@extend_schema(tags=["Tables"])
+class TableViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing restaurant tables.
+
+    Provides CRUD operations with comprehensive logging and response formatting.
+    All endpoints require authentication and appropriate permissions.
+    """
+
     queryset = Table.objects.all()
     serializer_class = TableSerializer
     lookup_field = "number"
     lookup_url_kwarg = "number"
 
-    @swagger_auto_schema(
+    def get_permissions(self):
+        """Set permissions based on action."""
+        if self.action in ["list", "retrieve"]:
+            permission_classes = [IsAuthenticated]
+        else:
+            permission_classes = [IsAdminUser]
+        return [permission() for permission in permission_classes]
+
+    @extend_schema(
         operation_id="list_tables",
-        operation_summary=TableDocData.list_operation_summary,
-        operation_description=TableDocData.list_operation_description,
+        summary="List all tables",
+        description="Retrieves a list of all tables with their current status.",
+        parameters=[
+            OpenApiParameter(
+                name="is_available",
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                description="Filter by availability",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="min_capacity",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Minimum table capacity",
+                required=False,
+            ),
+        ],
         responses={
-            status.HTTP_200_OK: TableDocData.list_response,
-            status.HTTP_401_UNAUTHORIZED: TableDocData.unauthorized_response,
-            status.HTTP_403_FORBIDDEN: TableDocData.forbidden_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: TableDocData.server_error_response,
+            200: PaginatedTablesResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Tables"],
     )
     def list(self, request, *args, **kwargs):
-        user_id = getattr(request.user, "id", "Anonymous")
-        logger.info(f"User {user_id} is requesting table list.")
+        """List all tables with optional filtering."""
+        log_user_action(request, "requested table list")
 
-        queryset = self.get_queryset()
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
         serializer = self.get_serializer(queryset, many=True)
+        response_data = PaginatedTablesResponseSerializer(serializer.data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-        logger.info(f"Returning {len(queryset)} tables.")
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity="Table List",
-        )
-
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_table",
-        operation_summary=TableDocData.retrieve_operation_summary,
-        operation_description=TableDocData.retrieve_operation_description,
+        summary="Get table details",
+        description="Retrieves detailed information for a specific table by number.",
         responses={
-            status.HTTP_200_OK: TableDocData.success_response,
-            status.HTTP_404_NOT_FOUND: TableDocData.not_found_response,
-            status.HTTP_401_UNAUTHORIZED: TableDocData.unauthorized_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: TableDocData.server_error_response,
+            200: FoundTableResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Tables"],
     )
     def retrieve(self, request, *args, **kwargs):
+        """Retrieve a specific table by number."""
         instance = self.get_object()
-        user_id = getattr(request.user, "id", "Anonymous")
-        logger.info(
-            f"User {user_id} is requesting details for table ID: {instance.id}."
-        )
+        log_user_action(request, f"requested table {instance.id}")
 
         serializer = self.get_serializer(instance)
+        response_data = FoundTableResponseSerializer(serializer.data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-        logger.info(f"Returning details for table ID: {instance.id}.")
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity=f"Table {instance.id}",
-        )
-
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_table",
-        operation_summary=TableDocData.create_operation_summary,
-        operation_description=TableDocData.create_operation_description,
-        request_body=TableSerializer,
+        summary="Create new table",
+        description="Creates a new table with the provided information.",
+        request=TableSerializer,
         responses={
-            status.HTTP_201_CREATED: TableDocData.success_response,
-            status.HTTP_400_BAD_REQUEST: TableDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: TableDocData.unauthorized_response,
-            status.HTTP_403_FORBIDDEN: TableDocData.forbidden_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: TableDocData.server_error_response,
+            201: CreateTableResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Tables"],
     )
     def create(self, request, *args, **kwargs):
-        user_id = getattr(request.user, "id", "Anonymous")
-
-        logger.info(
-            f"User {user_id} is attempting to create a new table with data: {request.data}."
-        )
+        """Create a new table."""
+        log_user_action(request, "attempted table creation", request.data)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        created_table = TableService.create_table(serializer.validated_data)
+        table = TableService.create_table(serializer.validated_data)
+        log_user_action(request, f"created table {table.id}")
 
-        logger.info(
-            f"Table ID: {created_table.id} created successfully by user {user_id}."
-        )
-        return ResponseWrapper.created(
-            data=self.get_serializer(created_table).data,
-            entity=f"Table {created_table.id}",
-        )
+        created_table = self.get_serializer(table).data
+        response_data = CreateTableResponseSerializer(created_table).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_table",
-        operation_summary=TableDocData.update_operation_summary,
-        operation_description=TableDocData.update_operation_description,
-        request_body=TableSerializer,
+        summary="Update table",
+        description="Updates an existing table's information. Supports partial updates.",
+        request=TableSerializer,
         responses={
-            status.HTTP_201_CREATED: TableDocData.success_response,
-            status.HTTP_404_NOT_FOUND: TableDocData.not_found_response,
-            status.HTTP_400_BAD_REQUEST: TableDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: TableDocData.unauthorized_response,
-            status.HTTP_403_FORBIDDEN: TableDocData.forbidden_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: TableDocData.server_error_response,
+            200: UpdateTableResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Tables"],
     )
     def update(self, request, *args, **kwargs):
+        """Update an existing table (full or partial)."""
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
-        user_id = getattr(request.user, "id", "Anonymous")
-        logger.info(
-            f"User {user_id} is attempting to update table ID: {instance.id} with data: {request.data}."
-        )
+
+        log_user_action(request, f"attempted table {instance.id} update", request.data)
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
 
-        updated_table = TableService.update_table(instance, serializer.validated_data)
+        table = TableService.update_table(instance, serializer.validated_data)
+        log_user_action(request, f"updated table {table.id}")
 
-        logger.info(
-            f"Table ID: {updated_table.id} updated successfully by user {user_id}."
-        )
-        return ResponseWrapper.updated(
-            data=self.get_serializer(updated_table).data,
-            entity=f"Table {updated_table.id}",
-        )
+        updated_table = self.get_serializer(table).data
+        response_data = UpdateTableResponseSerializer(updated_table).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="delete_table",
-        operation_summary=TableDocData.destroy_operation_summary,
-        operation_description=TableDocData.destroy_operation_description,
+        summary="Delete table",
+        description="Permanently removes a table from the system.",
         responses={
-            status.HTTP_200_OK: TableDocData.success_no_data_response,
-            status.HTTP_401_UNAUTHORIZED: TableDocData.unauthorized_response,
-            status.HTTP_403_FORBIDDEN: TableDocData.forbidden_response,
-            status.HTTP_404_NOT_FOUND: TableDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: TableDocData.server_error_response,
+            204: NoContentResponseSerializer,
+            400: UnauthorizedErrorResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Tables"],
     )
     def destroy(self, request, *args, **kwargs):
+        """Delete a table."""
         instance = self.get_object()
-        user_id = getattr(request.user, "id", "Anonymous")
-        logger.info(f"User {user_id} is attempting to delete table ID: {instance.id}.")
-
         table_id = instance.id
-        TableService.delete_table(instance)
 
-        logger.info(f"Table ID: {table_id} deleted successfully by user {user_id}.")
-        return ResponseWrapper.deleted(
-            entity=f"Table {table_id}",
-        )
+        log_user_action(request, f"attempted table {table_id} deletion")
+        TableService.delete_table(instance)
+        log_user_action(request, f"deleted table {table_id}")
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

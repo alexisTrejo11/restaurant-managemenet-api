@@ -1,25 +1,38 @@
 import logging
-
 from rest_framework import viewsets, permissions, filters, status
+from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
-
-from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
-
-from apps.shared.response import ResponseWrapper
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
 from ..models import Dish
-from ..serializers import DishSerializer
+from ..serializers import (
+    DishSerializer,
+    CreateDishResponseSerializer,
+    UpdateDishResponseSerializer,
+    RetrieveDishResponseSerializer,
+    ListDishResponseSerializer,
+    PaginatedDishesResponseSerializer,
+)
 from ..services import DishService
 from ..filters import DishFilter
-from ..documentation.menu_documentation import DishDocumentationData as DishDocData
+from apps.shared.response.serializers import (
+    ApiResponseSerializer,
+    NoContentResponseSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
+# Global error response mapping to reduce verbosity
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: ApiResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ApiResponseSerializer,
+}
 
-# TODO: Check Filters
+
+@extend_schema(tags=["Menu"])
 class DishViewSet(viewsets.ModelViewSet):
     serializer_class = DishSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -45,47 +58,51 @@ class DishViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Dish.objects.filter()
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="list_dishes",
-        operation_summary=DishDocData.list_operation_summary,
-        operation_description=DishDocData.list_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
+        summary="List all dishes",
+        description="Retrieve a paginated list of dishes with optional filtering by category, price range, and search term",
+        parameters=[
+            OpenApiParameter(
                 "category",
-                openapi.IN_QUERY,
-                description="Filter by category",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Filter by category (DRINKS, ALCOHOL_DRINKS, BREAKFASTS, STARTERS, MEALS, DESSERTS, EXTRAS)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "price_min",
-                openapi.IN_QUERY,
-                description="Minimum price",
-                type=openapi.TYPE_NUMBER,
+                type=OpenApiTypes.DECIMAL,
+                location=OpenApiParameter.QUERY,
+                description="Minimum price filter",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "price_max",
-                openapi.IN_QUERY,
-                description="Maximum price",
-                type=openapi.TYPE_NUMBER,
+                type=OpenApiTypes.DECIMAL,
+                location=OpenApiParameter.QUERY,
+                description="Maximum price filter",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "search",
-                openapi.IN_QUERY,
-                description="Search term (name or description)",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Search term (searches in name and description)",
+                required=False,
             ),
-            openapi.Parameter(
+            OpenApiParameter(
                 "ordering",
-                openapi.IN_QUERY,
-                description="Which field to use when ordering the results",
-                type=openapi.TYPE_STRING,
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Field to order results by (name, price, created_at)",
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: DishDocData.dish_list_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: DishDocData.server_error_reponse,
+            200: PaginatedDishesResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Menu"],
     )
     # @method_decorator(cache_page(60 * 15))
     def list(self, request, *args, **kwargs):
@@ -103,31 +120,29 @@ class DishViewSet(viewsets.ModelViewSet):
             f"Listed {len(queryset)} menu items", extra={"filters": query_params_dict}
         )
 
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity="Dish List",
-            metadata={
-                "total_items": queryset.count(),
-                "filters_applied": query_params_dict,
-            },
-        )
+        response_data = ListDishResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": "Dishes retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_dish",
-        operation_summary=DishDocData.retrieve_operation_summary,
-        operation_description=DishDocData.retrieve_operation_description,
+        summary="Retrieve a single dish",
+        description="Get detailed information about a specific dish by ID",
         responses={
-            status.HTTP_200_OK: DishDocData.dish_response,
-            status.HTTP_404_NOT_FOUND: DishDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: DishDocData.server_error_reponse,
+            200: RetrieveDishResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Menu"],
     )
     @method_decorator(cache_page(60 * 15))
     def retrieve(self, request, *args, **kwargs):
         logger.info(
             f"Retrieve request for menu item ID: {kwargs.get('id')}",
-            extra={"user": request.user.id, "request_data": request.data},
+            extra={"user": request.user.id},
         )
 
         instance = self.get_object()
@@ -137,20 +152,24 @@ class DishViewSet(viewsets.ModelViewSet):
             f"Successfully retrieved menu dish ID: {instance.id}",
             extra={"category": instance.category},
         )
-        return ResponseWrapper.found(data=serializer.data, entity="Dish")
+        response_data = RetrieveDishResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": "Dish retrieved successfully",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_dish",
-        operation_summary=DishDocData.create_operation_summary,
-        operation_description=DishDocData.create_operation_description,
-        request_body=DishSerializer,
+        summary="Create a new dish",
+        description="Create a new menu dish with category, price, and description",
+        request=DishSerializer,
         responses={
-            status.HTTP_201_CREATED: DishDocData.dish_response,
-            status.HTTP_400_BAD_REQUEST: DishDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: DishDocData.unauthorized_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: DishDocData.server_error_reponse,
+            201: CreateDishResponseSerializer,
+            400: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Menu"],
     )
     def create(self, request, *args, **kwargs):
         logger.info(
@@ -168,21 +187,25 @@ class DishViewSet(viewsets.ModelViewSet):
         )
 
         menu_serialized = self.get_serializer(menu_item)
-        return ResponseWrapper.created(data=menu_serialized.data, entity="Dish")
+        response_data = CreateDishResponseSerializer(
+            {
+                "data": menu_serialized.data,
+                "message": f"Dish {menu_item.name} successfully created",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_dish",
-        operation_summary=DishDocData.update_operation_summary,
-        operation_description=DishDocData.update_operation_description,
-        request_body=DishSerializer,
+        summary="Update a dish",
+        description="Update dish information (name, price, category, status, etc.)",
+        request=DishSerializer,
         responses={
-            status.HTTP_200_OK: DishDocData.dish_response,
-            status.HTTP_400_BAD_REQUEST: DishDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: DishDocData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: DishDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: DishDocData.server_error_reponse,
+            200: UpdateDishResponseSerializer,
+            400: ApiResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Menu"],
     )
     def update(self, request, *args, **kwargs):
         logger.info(
@@ -202,19 +225,23 @@ class DishViewSet(viewsets.ModelViewSet):
             f"Successfully updated menu dish ID: {instance.id}",
             extra={"updated_fields": list(request.data.keys())},
         )
-        return ResponseWrapper.updated(data=serializer.data, entity="Menu dish")
+        response_data = UpdateDishResponseSerializer(
+            {
+                "data": serializer.data,
+                "message": f"Dish {instance.name} successfully updated",
+            }
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="delete_dish",
-        operation_summary=DishDocData.destroy_operation_summary,
-        operation_description=DishDocData.destroy_operation_description,
+        summary="Delete a dish",
+        description="Remove a dish from the menu",
         responses={
-            status.HTTP_204_NO_CONTENT: DishDocData.success_no_data,
-            status.HTTP_401_UNAUTHORIZED: DishDocData.unauthorized_reponse,
-            status.HTTP_404_NOT_FOUND: DishDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: DishDocData.server_error_reponse,
+            204: NoContentResponseSerializer,
+            404: ApiResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Menu"],
     )
     def destroy(self, request, *args, **kwargs):
         logger.warning(
@@ -227,4 +254,4 @@ class DishViewSet(viewsets.ModelViewSet):
 
         logger.info(f"Successfully deleted menu item ID: {kwargs.get('id')}")
 
-        return ResponseWrapper.deleted(entity="Dish")
+        return Response(status=status.HTTP_204_NO_CONTENT)

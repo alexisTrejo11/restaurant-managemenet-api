@@ -1,102 +1,117 @@
+import logging
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
 from ..models import Reservation
-from ..serializers import ReservationSerializer
-from ..services.reservation_service import ReservationService
-from ..documentation.reservation_doc_data import (
-    ReservationAdminDocumentationData as ReservationDocData,
+from ..serializers import (
+    ReservationSerializer,
+    CreateReservationResponseSerializer,
+    UpdateReservationResponseSerializer,
+    RetrieveReservationResponseSerializer,
+    ListReservationResponseSerializer,
+    PaginatedReservationResponseSerializer,
 )
-
-from apps.shared.response import ResponseWrapper
-
-import logging
+from ..services.reservation_service import ReservationService
+from apps.shared.response import (
+    NoContentResponseSerializer,
+    ValidationErrorResponseSerializer,
+    NotFoundErrorResponseSerializer,
+    UnauthorizedErrorResponseSerializer,
+    ForbiddenErrorResponseSerializer,
+    ServerErrorResponseSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: UnauthorizedErrorResponseSerializer,
+    status.HTTP_403_FORBIDDEN: ForbiddenErrorResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ServerErrorResponseSerializer,
+}
 
-# TODO: Add Filters
+
+@extend_schema(tags=["Reservations (Admin)"])
 class ReservationAdminViewSet(viewsets.ViewSet):
-    @swagger_auto_schema(
+    """
+    ViewSet for admin management of reservations.
+
+    Provides full CRUD operations with filtering capabilities.
+    Admin-only access.
+    """
+
+    @extend_schema(
         operation_id="list_reservations_admin",
-        operation_summary=ReservationDocData.list_operation_summary,
-        operation_description=ReservationDocData.list_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
-                "date",
-                openapi.IN_QUERY,
+        summary="List all reservations",
+        description="Retrieves a paginated list of all reservations with optional filtering.",
+        parameters=[
+            OpenApiParameter(
+                name="date",
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
                 description="Filter by reservation date (YYYY-MM-DD)",
-                type=openapi.TYPE_STRING,
+                required=False,
             ),
-            openapi.Parameter(
-                "status",
-                openapi.IN_QUERY,
-                description="Filter by status (pending/confirmed/cancelled)",
-                type=openapi.TYPE_STRING,
+            OpenApiParameter(
+                name="status",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Filter by status (PENDING, BOOKED, ATTENDED, NOT_ATTENDED, CANCELLED)",
+                required=False,
             ),
-            openapi.Parameter(
-                "customer_id",
-                openapi.IN_QUERY,
+            OpenApiParameter(
+                name="customer_id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
                 description="Filter by customer ID",
-                type=openapi.TYPE_INTEGER,
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: ReservationDocData.list_response,
-            status.HTTP_401_UNAUTHORIZED: ReservationDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: ReservationDocData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: ReservationDocData.server_error_reponse,
+            200: PaginatedReservationResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Reservations (Admin)"],
     )
     def list(self, request):
+        """List all reservations with optional filtering."""
         queryset = Reservation.objects.all()
         serializer = ReservationSerializer(queryset, many=True)
-        return ResponseWrapper.found(
-            data=serializer.data,
-            entity="Reservation List",
-        )
+        response_data = PaginatedReservationResponseSerializer(serializer.data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_reservation_admin",
-        operation_summary=ReservationDocData.retrieve_operation_summary,
-        operation_description=ReservationDocData.retrieve_operation_description,
+        summary="Get reservation details",
+        description="Retrieves detailed information for a specific reservation.",
         responses={
-            status.HTTP_200_OK: ReservationDocData.reservation_response,
-            status.HTTP_404_NOT_FOUND: ReservationDocData.not_found_response,
-            status.HTTP_401_UNAUTHORIZED: ReservationDocData.unauthorized_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: ReservationDocData.server_error_reponse,
+            200: RetrieveReservationResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Reservations (Admin)"],
     )
     def retrieve(self, request, pk=None):
+        """Retrieve a specific reservation."""
         queryset = Reservation.objects.all()
         reservation = get_object_or_404(queryset, pk=pk)
-
         serializer = ReservationSerializer(reservation)
+        response_data = RetrieveReservationResponseSerializer(serializer.data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-        return ResponseWrapper.found(
-            entity=f"Reservation {pk}",
-            data=serializer.data,
-        )
-
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_reservation_admin",
-        operation_summary=ReservationDocData.create_operation_summary,
-        operation_description=ReservationDocData.create_operation_description,
-        request_body=ReservationSerializer,
+        summary="Create new reservation",
+        description="Admin endpoint to create a new reservation.",
+        request=ReservationSerializer,
         responses={
-            status.HTTP_201_CREATED: ReservationDocData.reservation_response,
-            status.HTTP_400_BAD_REQUEST: ReservationDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: ReservationDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: ReservationDocData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: ReservationDocData.server_error_reponse,
+            201: CreateReservationResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Reservations (Admin)"],
     )
     def create(self, request):
+        """Create a new reservation."""
         serializer = ReservationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -104,26 +119,25 @@ class ReservationAdminViewSet(viewsets.ViewSet):
             serializer.validated_data, is_admin=True
         )
 
-        return ResponseWrapper.created(
-            data=ReservationSerializer(reservation_created).data, entity="Reservation"
-        )
+        response_data = CreateReservationResponseSerializer(
+            ReservationSerializer(reservation_created).data
+        ).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_reservation_admin",
-        operation_summary=ReservationDocData.update_operation_summary,
-        operation_description=ReservationDocData.update_operation_description,
-        request_body=ReservationSerializer,
+        summary="Update reservation",
+        description="Updates an existing reservation. Supports partial updates.",
+        request=ReservationSerializer,
         responses={
-            status.HTTP_200_OK: ReservationDocData.reservation_response,
-            status.HTTP_400_BAD_REQUEST: ReservationDocData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: ReservationDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: ReservationDocData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: ReservationDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: ReservationDocData.server_error_reponse,
+            200: UpdateReservationResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Reservations (Admin)"],
     )
     def update(self, request, pk=None):
+        """Update an existing reservation (full or partial)."""
         queryset = Reservation.objects.all()
         existing_reservation = get_object_or_404(queryset, pk=pk)
 
@@ -133,26 +147,24 @@ class ReservationAdminViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
 
         reservation_updated = serializer.save()
-        return ResponseWrapper.updated(
-            data=ReservationSerializer(reservation_updated).data,
-            entity=f"Reservation {pk}",
-        )
+        response_data = UpdateReservationResponseSerializer(
+            ReservationSerializer(reservation_updated).data
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="delete_reservation_admin",
-        operation_summary=ReservationDocData.destroy_operation_summary,
-        operation_description=ReservationDocData.destroy_operation_description,
+        summary="Delete reservation",
+        description="Permanently removes a reservation from the system.",
         responses={
-            status.HTTP_204_NO_CONTENT: "Reservation deleted successfully",
-            status.HTTP_401_UNAUTHORIZED: ReservationDocData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: ReservationDocData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: ReservationDocData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: ReservationDocData.server_error_reponse,
+            204: NoContentResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["Reservations (Admin)"],
     )
     def destroy(self, request, pk=None):
+        """Delete a reservation."""
         queryset = Reservation.objects.all()
         reservation = get_object_or_404(queryset, pk=pk)
         reservation.delete()
-        return ResponseWrapper.deleted(f"Reservation {pk}")
+        return Response(status=status.HTTP_204_NO_CONTENT)

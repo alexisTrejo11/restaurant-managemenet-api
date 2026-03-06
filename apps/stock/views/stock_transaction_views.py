@@ -1,41 +1,56 @@
+import logging
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from ..serializers import StockTransactionSerializer as TransactionSerializer
+from rest_framework import status
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema
+
+from ..serializers import (
+    StockTransactionSerializer,
+    CreateTransactionResponseSerializer,
+    UpdateTransactionResponseSerializer,
+)
 from ..services.stock_transaction_service import (
     StockTransactionService as TransactionService,
 )
-from ..documentation.stock_transaction_data import (
-    StockTransactionDocumentationData as transactionDocData,
+from apps.shared.response import (
+    NoContentResponseSerializer,
+    ValidationErrorResponseSerializer,
+    NotFoundErrorResponseSerializer,
+    UnauthorizedErrorResponseSerializer,
+    ServerErrorResponseSerializer,
 )
-from drf_yasg.utils import swagger_auto_schema
-from rest_framework import status
-from apps.shared.response import ResponseWrapper
-import logging
 
 logger = logging.getLogger(__name__)
 
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: UnauthorizedErrorResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ServerErrorResponseSerializer,
+}
 
-@swagger_auto_schema(
-    method="post",
+
+@extend_schema(
     operation_id="register_stock_transaction",
-    operation_summary=transactionDocData.register_operation_summary,
-    operation_description=transactionDocData.register_operation_description,
-    request_body=TransactionSerializer,
+    summary="Register stock transaction",
+    description="Records a new stock transaction (IN or OUT) and updates inventory levels.",
+    request=StockTransactionSerializer,
     responses={
-        status.HTTP_201_CREATED: transactionDocData.transaction_response,
-        status.HTTP_400_BAD_REQUEST: transactionDocData.validation_error_response,
-        status.HTTP_401_UNAUTHORIZED: transactionDocData.unauthorized_reponse,
-        status.HTTP_500_INTERNAL_SERVER_ERROR: transactionDocData.server_error_reponse,
+        201: CreateTransactionResponseSerializer,
+        400: ValidationErrorResponseSerializer,
+        **COMMON_RESPONSES,
     },
     tags=["Inventory Transactions"],
 )
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def register_transaction(request):
+    """Register a new stock transaction."""
     user_id = request.user.id
     logger.info(f"User {user_id} is requesting to register a stock transaction")
 
-    serializer = TransactionSerializer(data=request.data, context={"request": request})
+    serializer = StockTransactionSerializer(
+        data=request.data, context={"request": request}
+    )
     serializer.is_valid(raise_exception=True)
 
     transaction = TransactionService.process_transaction(serializer.validated_data)
@@ -44,36 +59,38 @@ def register_transaction(request):
         f"Transaction ID: {transaction.id} for Stock {transaction.stock.id} created successfully by user {user_id}."
     )
 
-    transaction_serialized = TransactionSerializer(transaction)
-    return ResponseWrapper.created(
-        data=transaction_serialized.data, entity="Stock Transaction"
-    )
+    transaction_serialized = StockTransactionSerializer(transaction)
+    response_data = CreateTransactionResponseSerializer(
+        transaction_serialized.data
+    ).data
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
-@swagger_auto_schema(
-    method="put",
+@extend_schema(
     operation_id="update_stock_transaction",
-    operation_summary=transactionDocData.update_operation_summary,
-    operation_description=transactionDocData.update_operation_description,
-    request_body=TransactionSerializer,
+    summary="Update stock transaction",
+    description="Updates an existing stock transaction details.",
+    request=StockTransactionSerializer,
     responses={
-        status.HTTP_200_OK: transactionDocData.transaction_response,
-        status.HTTP_400_BAD_REQUEST: transactionDocData.validation_error_response,
-        status.HTTP_401_UNAUTHORIZED: transactionDocData.unauthorized_reponse,
-        status.HTTP_404_NOT_FOUND: transactionDocData.not_found_response,
-        status.HTTP_500_INTERNAL_SERVER_ERROR: transactionDocData.server_error_reponse,
+        200: UpdateTransactionResponseSerializer,
+        400: ValidationErrorResponseSerializer,
+        404: NotFoundErrorResponseSerializer,
+        **COMMON_RESPONSES,
     },
     tags=["Inventory Transactions"],
 )
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def update_transaction(request, transaction_id):
+    """Update an existing stock transaction."""
     user_id = request.user.id
     logger.info(
         f"User {user_id} is requesting to update stock transaction {transaction_id}"
     )
 
-    serializer = TransactionSerializer(data=request.data, context={"request": request})
+    serializer = StockTransactionSerializer(
+        data=request.data, context={"request": request}
+    )
     serializer.is_valid(raise_exception=True)
 
     existing_transaction = TransactionService.get_transaction(transaction_id)
@@ -85,28 +102,28 @@ def update_transaction(request, transaction_id):
         f"Transaction ID: {transaction_updated.id} for Stock {transaction_updated.stock.id} updated successfully by user {user_id}."
     )
 
-    transaction_serialized = TransactionSerializer(transaction_updated)
-    return ResponseWrapper.updated(
-        data=transaction_serialized.data, entity="Stock Transaction"
-    )
+    transaction_serialized = StockTransactionSerializer(transaction_updated)
+    response_data = UpdateTransactionResponseSerializer(
+        transaction_serialized.data
+    ).data
+    return Response(response_data, status=status.HTTP_200_OK)
 
 
-@swagger_auto_schema(
-    method="delete",
+@extend_schema(
     operation_id="delete_stock_transaction",
-    operation_summary=transactionDocData.delete_operation_summary,
-    operation_description=transactionDocData.delete_operation_description,
+    summary="Delete stock transaction",
+    description="Permanently removes a stock transaction from the system.",
     responses={
-        status.HTTP_204_NO_CONTENT: "Transaction deleted successfully",
-        status.HTTP_401_UNAUTHORIZED: transactionDocData.unauthorized_reponse,
-        status.HTTP_404_NOT_FOUND: transactionDocData.not_found_response,
-        status.HTTP_500_INTERNAL_SERVER_ERROR: transactionDocData.server_error_reponse,
+        204: NoContentResponseSerializer,
+        404: NotFoundErrorResponseSerializer,
+        **COMMON_RESPONSES,
     },
     tags=["Inventory Transactions"],
 )
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def delete_transaction(request, transaction_id):
+    """Delete a stock transaction."""
     user_id = request.user.id
     logger.info(
         f"User {user_id} is requesting to delete stock transaction {transaction_id}"
@@ -119,4 +136,4 @@ def delete_transaction(request, transaction_id):
         f"Transaction ID: {transaction_id} deleted successfully by user {user_id}."
     )
 
-    return ResponseWrapper.deleted(entity="Stock Transaction")
+    return Response(status=status.HTTP_204_NO_CONTENT)

@@ -1,9 +1,17 @@
 import logging
+from datetime import datetime
+from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 from rest_framework.exceptions import APIException, ValidationError
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
-from apps.shared.response import ResponseWrapper
+from apps.shared.response import (
+    ForbiddenErrorResponseSerializer,
+    NotFoundErrorResponseSerializer,
+    ValidationErrorResponseSerializer,
+    UnauthorizedErrorResponseSerializer,
+    ServerErrorResponseSerializer,
+)
 from typing import Dict, Any, Optional, Union
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
@@ -11,9 +19,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 logger = logging.getLogger(__name__)
 
 
-def custom_exception_handler(
-    exc: Exception, context: Dict[str, Any]
-) -> ResponseWrapper:
+def custom_exception_handler(exc: Exception, context: Dict[str, Any]) -> Response:
     """
     Enhanced unified exception handler with:
     - Detailed error logging
@@ -27,7 +33,7 @@ def custom_exception_handler(
         context: DRF context containing request, view, args, kwargs
 
     Returns:
-        ResponseWrapper: Consistent error response
+        Response: Consistent error response
     """
     request = context.get("request")
     view = context.get("view")
@@ -49,17 +55,20 @@ def custom_exception_handler(
         return handle_value_error(exc)
 
     if isinstance(exc, Http404):
-        return ResponseWrapper.failure(
-            status_code=404,
-            data={"type": "NotFound"},
-            message=str(exc) or "Resource not found",
+        return Response(
+            data={
+                "data": {"type": "NotFound"},
+                "timestamp": datetime.now().isoformat() + "Z",
+                "success": False,
+                "status_code": 404,
+                "message": str(exc) or "Resource not found",
+                "metadata": {},
+            },
+            status=404,
         )
 
     if isinstance(exc, PermissionDenied):
-        return ResponseWrapper.forbidden(
-            data={"type": "PermissionDenied"},
-            message=str(exc) or "You don't have permission to perform this action",
-        )
+        return Response(data=ForbiddenErrorResponseSerializer(), status=403)
 
     if isinstance(exc, ValidationError):
         return handle_validation_error(exc)
@@ -73,53 +82,80 @@ def custom_exception_handler(
     return handle_unexpected_error(exc)
 
 
-def handle_validation_error(exc: ValidationError) -> ResponseWrapper:
+def handle_validation_error(exc: ValidationError) -> Response:
     """Special handling for DRF validation errors"""
     error_data = {
         "type": "ValidationError",
         "code": "invalid",
         "fields": exc.detail if isinstance(exc.detail, dict) else None,
     }
-    return ResponseWrapper.failure(
-        data=error_data,
-        message="Validation failed" if not str(exc) else str(exc),
-        status_code=400,
+    return Response(
+        data={
+            "data": error_data,
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": 400,
+            "message": "Validation failed" if not str(exc) else str(exc),
+            "metadata": {},
+        },
+        status=400,
     )
 
 
-def handle_drf_response(exc: Exception, response) -> ResponseWrapper:
+def handle_drf_response(exc: Exception, response) -> Response:
     """Handle responses from DRF's default exception handler"""
     error_data = {
         "type": exc.__class__.__name__,
         "code": getattr(exc, "default_code", None),
         "details": normalize_error_details(response.data),
     }
-    return ResponseWrapper.failure(
-        data=error_data,
-        message=get_error_message(exc),
-        status_code=response.status_code,
+    return Response(
+        data={
+            "data": error_data,
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": response.status_code,
+            "message": get_error_message(exc),
+            "metadata": {},
+        },
+        status=response.status_code,
     )
 
 
-def handle_api_exception(exc: APIException) -> ResponseWrapper:
+def handle_api_exception(exc: APIException) -> Response:
     """Handle custom APIException-based exceptions"""
     error_data = {
         "type": exc.__class__.__name__,
         "code": getattr(exc, "default_code", None),
         "details": normalize_error_details(getattr(exc, "detail", None)),
     }
-    return ResponseWrapper.failure(
-        data=error_data,
-        message=get_error_message(exc),
-        status_code=getattr(exc, "status_code", 400),
+    status_code = getattr(exc, "status_code", 400)
+    return Response(
+        data={
+            "data": error_data,
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": status_code,
+            "message": get_error_message(exc),
+            "metadata": {},
+        },
+        status=status_code,
     )
 
 
-def handle_unexpected_error(exc: Exception) -> ResponseWrapper:
+def handle_unexpected_error(exc: Exception) -> Response:
     """Fallback handler for unexpected exceptions"""
     logger.critical("Unhandled exception occurred", exc_info=True, stack_info=True)
-    return ResponseWrapper.internal_server_error(
-        data={"type": "InternalServerError"}, message="An unexpected error occurred"
+    return Response(
+        data={
+            "data": {"type": "InternalServerError"},
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": 500,
+            "message": "An unexpected error occurred",
+            "metadata": {},
+        },
+        status=500,
     )
 
 
@@ -145,7 +181,7 @@ def get_error_message(exc: Exception) -> str:
     return str(exc) if str(exc) else "Request failed"
 
 
-def handle_jwt_exception(exc: Union[InvalidToken, TokenError]) -> ResponseWrapper:
+def handle_jwt_exception(exc: Union[InvalidToken, TokenError]) -> Response:
     """Special handling for JWT token related exceptions"""
     error_data = {
         "type": exc.__class__.__name__,
@@ -155,8 +191,16 @@ def handle_jwt_exception(exc: Union[InvalidToken, TokenError]) -> ResponseWrappe
 
     status_code = 401 if isinstance(exc, InvalidToken) else 400
 
-    return ResponseWrapper.failure(
-        data=error_data, message=get_jwt_error_message(exc), status_code=status_code
+    return Response(
+        data={
+            "data": error_data,
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": status_code,
+            "message": get_jwt_error_message(exc),
+            "metadata": {},
+        },
+        status=status_code,
     )
 
 
@@ -182,10 +226,20 @@ def get_jwt_error_message(exc: Union[InvalidToken, TokenError]) -> str:
     return "Authentication token error"
 
 
-def handle_value_error(exc: ValueError) -> ResponseWrapper:
+def handle_value_error(exc: ValueError) -> Response:
     """Special handling for ValueError exceptions"""
-    return ResponseWrapper.failure(
-        status_code=400,
-        data={"type": "ValueError", "code": "invalid_value", "details": str(exc)},
-        message="Invalid data provided: " + str(exc),
+    return Response(
+        data={
+            "data": {
+                "type": "ValueError",
+                "code": "invalid_value",
+                "details": str(exc),
+            },
+            "timestamp": datetime.now().isoformat() + "Z",
+            "success": False,
+            "status_code": 400,
+            "message": "Invalid data provided: " + str(exc),
+            "metadata": {},
+        },
+        status=400,
     )

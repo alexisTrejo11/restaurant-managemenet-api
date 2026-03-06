@@ -1,11 +1,13 @@
 from rest_framework import status
 from drf_yasg import openapi
-from ..response.api_response_serializers import *
+from ..response.serializers import *
+
 
 class ErrorResponses:
     """
     Centralized authentication error responses for reuse across endpoints
     """
+
     @staticmethod
     def get_not_found_response():
         return openapi.Response(
@@ -18,9 +20,9 @@ class ErrorResponses:
                     "data": None,
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 404,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )
 
     @staticmethod
@@ -35,11 +37,11 @@ class ErrorResponses:
                     "data": None,
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 401,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )
-    
+
     @staticmethod
     def get_forbidden_response():
         return openapi.Response(
@@ -52,11 +54,11 @@ class ErrorResponses:
                     "data": None,
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 403,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )
-    
+
     @staticmethod
     def get_validation_error_response():
         return openapi.Response(
@@ -68,15 +70,15 @@ class ErrorResponses:
                     "message": "Validation Error",
                     "data": {
                         "field_1": ["This field is required."],
-                        "field_2": ["This field may not be blank."]
+                        "field_2": ["This field may not be blank."],
                     },
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 400,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )
-    
+
     @staticmethod
     def get_server_error_response():
         return openapi.Response(
@@ -89,9 +91,9 @@ class ErrorResponses:
                     "data": None,
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 500,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )
 
     @staticmethod
@@ -106,10 +108,9 @@ class ErrorResponses:
                 status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorResponses.get_server_error_response(),
             }
         else:
-            return { 
+            return {
                 status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorResponses.get_server_error_response(),
             }
-
 
     @staticmethod
     def get_success_operation():
@@ -123,7 +124,7 @@ class ErrorResponses:
                     "data": "null",
                     "timestamp": "2025-05-28T10:30:00Z",
                     "status_code": 200,
-                    "metadata": {}
+                    "metadata": {},
                 }
-            }
+            },
         )

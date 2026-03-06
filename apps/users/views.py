@@ -1,60 +1,89 @@
 import logging
 from rest_framework.pagination import PageNumberPagination
 from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
 
-from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
-
-from apps.shared.response import ResponseWrapper
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 
 from .models import User
-from .serializers import UserCreateUpdateSerializer, UserResponseSerializer
-from .documentation.user_documentation_data import UserDocumentationData
+from .serializers import (
+    UserCreateUpdateSerializer,
+    UserResponseSerializer,
+    CreateUserResponseSerializer,
+    UpdateUserResponseSerializer,
+    RetrieveUserResponseSerializer,
+    ListUserResponseSerializer,
+    PaginatedUsersResponseSerializer,
+)
 from .services import UserService
+from apps.shared.response import (
+    NoContentResponseSerializer,
+    ValidationErrorResponseSerializer,
+    NotFoundErrorResponseSerializer,
+    UnauthorizedErrorResponseSerializer,
+    ForbiddenErrorResponseSerializer,
+    ServerErrorResponseSerializer,
+)
 
 
 logger = logging.getLogger(__name__)
 
+COMMON_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: UnauthorizedErrorResponseSerializer,
+    status.HTTP_403_FORBIDDEN: ForbiddenErrorResponseSerializer,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ServerErrorResponseSerializer,
+}
 
+
+@extend_schema(tags=["Users"])
 class UserModelViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing system users.
+
+    Provides CRUD operations with comprehensive logging and response formatting.
+    All endpoints require admin authentication.
+    """
+
     queryset = User.objects.all()
     serializer_class = UserResponseSerializer
     permission_classes = [permissions.IsAdminUser]
     pagination_class = PageNumberPagination
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="list_users",
-        operation_summary=UserDocumentationData.list_operation_summary,
-        operation_description=UserDocumentationData.list_operation_description,
-        manual_parameters=[
-            openapi.Parameter(
-                "role",
-                openapi.IN_QUERY,
+        summary="List all users",
+        description="Retrieves a list of all users with pagination support.",
+        parameters=[
+            OpenApiParameter(
+                name="role",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
                 description="Filter by user role",
-                type=openapi.TYPE_STRING,
+                required=False,
             ),
-            openapi.Parameter(
-                "is_active",
-                openapi.IN_QUERY,
+            OpenApiParameter(
+                name="is_active",
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
                 description="Filter by active status",
-                type=openapi.TYPE_BOOLEAN,
+                required=False,
             ),
-            openapi.Parameter(
-                "page_size",
-                openapi.IN_QUERY,
+            OpenApiParameter(
+                name="page_size",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
                 description="Number of results per page",
-                type=openapi.TYPE_INTEGER,
+                required=False,
             ),
         ],
         responses={
-            status.HTTP_200_OK: UserDocumentationData.user_list_response,
-            status.HTTP_401_UNAUTHORIZED: UserDocumentationData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: UserDocumentationData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: UserDocumentationData.server_error_reponse,
+            200: PaginatedUsersResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["User Management"],
     )
     def list(self, request, *args, **kwargs):
+        """List all users with optional filtering."""
         admin = request.user
         logger.info(
             f"Admin {admin.id} listing users. Query params: {request.query_params}",
@@ -68,22 +97,21 @@ class UserModelViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
 
         serializer_data = self.get_serializer(queryset, many=True).data
-        return ResponseWrapper.found(data=serializer_data, entity="User List")
+        response_data = PaginatedUsersResponseSerializer(serializer_data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="retrieve_user",
-        operation_summary=UserDocumentationData.retrieve_operation_summary,
-        operation_description=UserDocumentationData.retrieve_operation_description,
+        summary="Get user details",
+        description="Retrieves detailed information for a specific user.",
         responses={
-            status.HTTP_200_OK: UserDocumentationData.user_response,
-            status.HTTP_401_UNAUTHORIZED: UserDocumentationData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: UserDocumentationData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: UserDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: UserDocumentationData.server_error_reponse,
+            200: RetrieveUserResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["User Management"],
     )
     def retrieve(self, request, *args, **kwargs):
+        """Retrieve a specific user."""
         admin = request.user
         user = self.get_object()
 
@@ -93,23 +121,22 @@ class UserModelViewSet(viewsets.ModelViewSet):
         )
 
         serializer = self.get_serializer(user)
-        return ResponseWrapper.found(data=serializer.data, entity="User")
+        response_data = RetrieveUserResponseSerializer(serializer.data).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="create_user",
-        operation_summary=UserDocumentationData.create_operation_summary,
-        operation_description=UserDocumentationData.create_operation_description,
-        request_body=UserCreateUpdateSerializer,
+        summary="Create new user",
+        description="Creates a new user account with the provided information.",
+        request=UserCreateUpdateSerializer,
         responses={
-            status.HTTP_201_CREATED: UserDocumentationData.user_response,
-            status.HTTP_400_BAD_REQUEST: UserDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: UserDocumentationData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: UserDocumentationData.forbidden_reponse,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: UserDocumentationData.server_error_reponse,
+            201: CreateUserResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["User Management"],
     )
     def create(self, request, *args, **kwargs):
+        """Create a new user."""
         admin = request.user
         logger.info(f"Admin {admin.id} init creation of user.")
 
@@ -120,29 +147,29 @@ class UserModelViewSet(viewsets.ModelViewSet):
         user = serializer.save()
 
         logger.info(
-            f"Admin {admin.id} succesfully create new User {user.id}",
+            f"Admin {admin.id} successfully create new User {user.id}",
             extra={"user_id": user.id, "admin_id": admin.id},
         )
 
-        response_data = UserResponseSerializer(user).data
-        return ResponseWrapper.created(data=response_data, entity="User")
+        response_data = CreateUserResponseSerializer(
+            UserResponseSerializer(user).data
+        ).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="update_user",
-        operation_summary=UserDocumentationData.update_operation_summary,
-        operation_description=UserDocumentationData.update_operation_description,
-        request_body=UserCreateUpdateSerializer,
+        summary="Update user",
+        description="Updates an existing user's information. Supports partial updates.",
+        request=UserCreateUpdateSerializer,
         responses={
-            status.HTTP_200_OK: UserDocumentationData.user_response,
-            status.HTTP_400_BAD_REQUEST: UserDocumentationData.validation_error_response,
-            status.HTTP_401_UNAUTHORIZED: UserDocumentationData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: UserDocumentationData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: UserDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: UserDocumentationData.server_error_reponse,
+            200: UpdateUserResponseSerializer,
+            400: ValidationErrorResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["User Management"],
     )
     def update(self, request, *args, **kwargs):
+        """Update an existing user (full or partial)."""
         admin = request.user
         user = self.get_object()
 
@@ -164,25 +191,23 @@ class UserModelViewSet(viewsets.ModelViewSet):
             extra={"admin_id": admin.id, "user_id": user.id},
         )
 
-        return ResponseWrapper.updated(
-            data=UserResponseSerializer(updated_user).data,
-            entity="User",
-        )
+        response_data = UpdateUserResponseSerializer(
+            UserResponseSerializer(updated_user).data
+        ).data
+        return Response(response_data, status=status.HTTP_200_OK)
 
-    @swagger_auto_schema(
+    @extend_schema(
         operation_id="delete_user",
-        operation_summary=UserDocumentationData.destroy_operation_summary,
-        operation_description=UserDocumentationData.destroy_operation_description,
+        summary="Delete user",
+        description="Deactivates a user account (soft delete).",
         responses={
-            status.HTTP_204_NO_CONTENT: UserDocumentationData.success_no_data_response,
-            status.HTTP_401_UNAUTHORIZED: UserDocumentationData.unauthorized_reponse,
-            status.HTTP_403_FORBIDDEN: UserDocumentationData.forbidden_reponse,
-            status.HTTP_404_NOT_FOUND: UserDocumentationData.not_found_response,
-            status.HTTP_500_INTERNAL_SERVER_ERROR: UserDocumentationData.server_error_reponse,
+            204: NoContentResponseSerializer,
+            404: NotFoundErrorResponseSerializer,
+            **COMMON_RESPONSES,
         },
-        tags=["User Management"],
     )
     def destroy(self, request, *args, **kwargs):
+        """Delete a user (soft delete by setting is_active to False)."""
         admin = request.user
         user = self.get_object()
 
@@ -199,4 +224,4 @@ class UserModelViewSet(viewsets.ModelViewSet):
             extra={"admin_id": admin.id, "user_id": user.id},
         )
 
-        return ResponseWrapper.deleted("User")
+        return Response(status=status.HTTP_204_NO_CONTENT)

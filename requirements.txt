@@ -10,7 +10,6 @@ factory-boy
 django-redis
 djangorestframework-simplejwt
 django-ratelimit
-drf-yasg
+drf-spectacular
 python-dotenv
-dependency-injector
 django-filter

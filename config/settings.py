@@ -24,7 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = True
-ALLOWED_HOSTS = ["192.168.0.59"]
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -35,7 +35,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "drf_yasg",
+    "drf_spectacular",
     "rest_framework",
     "rest_framework_simplejwt",
     "django_filters",
@@ -81,6 +81,18 @@ REST_FRAMEWORK = {
         "user": "40/minute",
     },
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Restaurant Management API",
+    "DESCRIPTION": "A comprehensive API for managing restaurants, including menus, orders, tables, reservations, payments, and user management.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SCHEMA_PATH_PREFIX": "/api/",
+    "SPECTACULAR_DEFAULTS": {
+        "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    },
 }
 
 AUTH_USER_MODEL = "users.User"
