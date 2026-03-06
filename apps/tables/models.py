@@ -4,17 +4,7 @@ from django.core.validators import RegexValidator
 
 class Table(models.Model):
     capacity = models.IntegerField()
-    number = models.CharField(
-        max_length=10,
-        unique=True,
-        validators=[
-            RegexValidator(
-                regex=r'^[A-Z]-\d{2}$',
-                message='Use format like T-01, B-02, etc.',
-                code='invalid_table_number'
-            )
-        ]
-    )
+    number = models.CharField(max_length=10, unique=True)
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
